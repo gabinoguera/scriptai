@@ -1,15 +1,6 @@
 import openai
-import re
-import base64
-import requests
-import pandas as pd
 import os
 from script_estructura_articulos_v2 import generated_prompt
-
-# Leemos el archivo CSV que subimos al entorno de Colab(el encoding que me ha funcionado es Latin pero se puede probar con utf-8)
-
-#df = pd.read_csv('resultante.txt', encoding='latin-1')
-#df = pd.read_csv('question.csv', encoding='utf-8')
 
 # Cargar las variables de entorno desde el archivo .env
 from dotenv import load_dotenv, find_dotenv
