@@ -47,10 +47,3 @@ with open('resultante.txt', 'w', encoding='utf-8') as file:
 
 print("Proceso completado. El resultado se ha guardado en 'resultante.txt'.")
 
-
-
-# Verificar el estado de la respuesta
-#if response.status_code == 201:
- #   print('Post creado correctamente')
-#else:
-#    print('Error al crear el post')
