@@ -1,0 +1,127 @@
+import openai
+import re
+import os
+import time
+
+
+# Cargar las variables de entorno desde el archivo .env
+from dotenv import load_dotenv, find_dotenv
+_ = load_dotenv(find_dotenv())
+
+# Configurar la clave de API de OpenAI
+openai.api_key = os.getenv('API_GPT_KEY')
+
+
+#Keyword semilla
+query= "diplomatura marketing digital"
+
+def save_to_file(filename, content):
+  with open(filename, 'w') as f:
+    f.write("\n".join(content))
+
+def generate_content(prompt, model="gpt-3.5-turbo-16k", max_tokens=2000, temperature=0.4, lang="es"):
+  time.sleep(1)
+  gpt_response = openai.ChatCompletion.create(
+    model=model,
+    messages=[
+      {"role": "system", "content": "Simulate an exceptionally talented journalist and editor. Given the following instructions, think step by step and produce the best possible output you can."},
+      {"role": "user", "content": prompt}],
+    max_tokens=max_tokens,
+    n=1,
+    stop=None,
+    temperature=temperature,
+  )
+  response = gpt_response['choices'][0]['message']['content'].strip()
+  #print(response)
+  return response.strip().split('\n')
+
+
+def generate_outline(topic, model="gpt-4", max_tokens=2000, lang="es"):
+  time.sleep(1)
+  prompt = f"Generate an incredibly thorough article outline for the keyword: {query}. Consider all possible angles and be as thorough as possible. Please use Roman Numerals for each section."
+
+  outline = generate_content(prompt, model=model, max_tokens=max_tokens)
+  save_to_file("outline.txt", outline)
+
+  return outline
+
+
+def improve_outline(outline, query, model="gpt-4", max_tokens=1500, lang="es"):
+    time.sleep(1)
+    prompt = f"Given the following article outline, please improve and extend this outline significantly as much as you can keeping in mind the SEO keyword: {query}. Try and include and extend this as much as you can. Please use Roman Numerals for each section. The goal is as thorough, clear, and useful out line as possible exploring the topic in as much depth as possible. Think step by step before answering. though please also consider additional improvements not included in this outlines.  Outline to improve: {outline}."
+    improved_outline = generate_content(prompt, model=model, max_tokens=max_tokens)
+    save_to_file("improved_outline.txt", improved_outline)
+    return improved_outline
+
+
+def generate_sections(improved_outline, model="gpt-4", max_tokens=2000, lang="es"):
+    sections = []
+
+    # Parse the outline to identify the major sections
+    major_sections = []
+    current_section = []
+    for part in improved_outline:
+        if re.match(r'^[ \t]*[#]*[ \t]*(I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV)\b', part):
+            if current_section:  # not the first section
+                major_sections.append('\n'.join(current_section))
+                current_section = []
+        current_section.append(part)
+    if current_section:  # Append the last section
+        major_sections.append('\n'.join(current_section))
+
+    # Generate content for each major section
+    for i, section_outline in enumerate(major_sections):
+        full_outline = "Given the full improved outline: "
+        full_outline += '\n'.join(improved_outline)
+        specific_section = ", and focusing specifically on the following section: "
+        specific_section += section_outline
+        prompt = full_outline + specific_section + ", please write a thorough section that goes in-depth, provides detail and evidence, and adds as much additional value as possible. Keep whatever hierarchy you find. Section text:"
+        section = generate_content(prompt, model=model, max_tokens=max_tokens)
+        sections.append(section)
+        save_to_file(f"section_{i+1}.txt", section)
+    return sections
+
+
+def improve_section(section, i, model="gpt-4", max_tokens=1500, lang="es"):
+    time.sleep(3)
+    prompt = f"Given the following section of the article: {section}, please make thorough and improvements to this section. Keep whatever hierarchy you find. Only provide the updated section, not the text of your recommendation, just make the changes. Provide the updated section in valid Markdown please. Updated Section with improvements:"
+    improved_section = generate_content(prompt, model=model, max_tokens=max_tokens)
+    save_to_file(f"improved_section_{i+1}.txt", improved_section)
+    return " ".join(improved_section)  # join the lines into a single string
+
+def concatenate_files(file_names, output_file_name):
+    final_draft = ''
+
+    for file_name in file_names:
+        with open(file_name, 'r') as file:
+            final_draft += file.read() + "\n\n"  # Add two newline characters between sections
+
+    with open(output_file_name, 'w') as output_file:
+        output_file.write(final_draft)
+
+    print("Final draft created.\n")
+    return final_draft
+
+#**Función main**
+
+def main():
+    print('Generando esquema...')
+    outline = generate_outline(topic=query)
+
+    print('Mejorando esquema...')
+    improved_outline = improve_outline(outline, query)
+
+    print('Generando secciones...')
+    sections = generate_sections(improved_outline)
+
+    print('Mejorando secciones...')
+    for i, section in enumerate(sections):
+        improved_section = improve_section(section, i)
+
+    print('Combinando archivos...')
+    final_draft = concatenate_files(['outline.txt', 'improved_outline.txt'] + ['section_{}.txt'.format(i+1) for i in range(len(sections))], 'final_draft.txt')
+
+    print('Finalizado.')
+
+if __name__ == '__main__':
+    main()
