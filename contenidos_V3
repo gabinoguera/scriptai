@@ -1,69 +1,319 @@
-import openai
-import re
+# Import necessary libraries
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+from nltk.probability import FreqDist
+from nltk.collocations import BigramAssocMeasures, BigramCollocationFinder
+from newspaper import Article
+import nltk
+import statistics
+import collections
+from nltk.collocations import TrigramAssocMeasures, TrigramCollocationFinder
+from nltk.collocations import QuadgramAssocMeasures, QuadgramCollocationFinder
+import base64
+from wordpress_xmlrpc import Client, WordPressPost
+from wordpress_xmlrpc.methods.posts import GetPosts, NewPost
 import os
 import time
+import openai
+import re
+
+nltk.download('stopwords')
+nltk.download('punkt')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('tagsets')
+nltk.download('words')
+nltk.download('maxent_ne_chunker')
+nltk.download('vader_lexicon')
+nltk.download('inaugural')
+nltk.download('webtext')
+nltk.download('treebank')
+nltk.download('gutenberg')
+nltk.download('genesis')
+nltk.download('trigram_collocations')
+nltk.download('quadgram_collocations')
 
 
 # Cargar las variables de entorno desde el archivo .env
 from dotenv import load_dotenv, find_dotenv
 _ = load_dotenv(find_dotenv())
 
+#--------------- GOOGLE CUSTOM SEARCH: nos conectamos a la API de Google a través de generar un buscador global(tambien puede ser para un site en especifico)
+
+query = "10 estrategias de marketing"
+title = "10 estrategias de marketing"
+country = "ES"
+leng = "ES"
+
+
+def google_custom_search_df(query, country="ES"):
+    API_CUSTOM_SEARCH_KEY = os.getenv('API_CUSTOM_SEARCH_KEY')
+    API_CUSTOM_SEARCH_ID = os.getenv('API_CUSTOM_SEARCH_ID')
+
+    # URL request
+    url = f"https://www.googleapis.com/customsearch/v1?key={API_CUSTOM_SEARCH_KEY}&cx={API_CUSTOM_SEARCH_ID}&q={query}&start=1&gl={country}"
+    data = requests.get(url).json()
+
+    # Extraer lo que contiene items:
+    items = data.get("items")
+
+    # Crear un DataFrame con los resultados de la búsqueda
+    df = pd.DataFrame(items, columns=['title', 'link'])
+
+    return df
+
+df = google_custom_search_df(query, country)
+
+
+#-------------------SCRAPING: del texto de los articulos de las 10 primeras posiciones de Google SERP
+
+#Extraer el texto de los articulos con la libreria newspapper y, en su defecto, con beautiful soup
+
+def scrape_article(url):
+    try:
+        article = Article(url)
+        article.download()
+        article.parse()
+        if not article.text:
+            # Si Newspaper no pudo obtener el texto, intenta con BeautifulSoup
+            page = requests.get(url)
+            soup = BeautifulSoup(page.content, 'html.parser')
+            
+            # Busca contenido en etiquetas <p> o <div>
+            article_text = ' '.join([p.get_text() for p in soup.find_all(['p', 'div'])])
+            
+            return article_text
+        return article.text
+    except Exception as e:
+        print(f"Error al scrapear el artículo: {str(e)}")
+        return ""
+
+def scrape_articles_in_dataframe(df):
+    scraped_texts = []  # Aquí almacenaremos el texto de los artículos
+
+    for url in df['link']:
+        scraped_text = scrape_article(url)
+        scraped_texts.append(scraped_text)
+
+    # Agregamos los textos como una nueva columna en el DataFrame
+    df['scraped_text'] = scraped_texts
+
+    return df
+
+#----------------------ANÁLISIS DE TEXTO Y RESUMEN: analiza el texto con una libreria de python (nltk) y lo resume para obtener un contexto solido en base a los primeros resultados
+
+# Define a function to perform NLP analysis and return a string of keyness results
+def analyze_text(text):
+    # Tokenize the text and remove stop words
+    tokens = [word.lower() for word in word_tokenize(text) if word.isalpha() and word.lower() not in stopwords.words('spanish')]
+    # Get the frequency distribution of the tokens
+    fdist = FreqDist(tokens)
+    # Create a bigram finder and get the top 20 bigrams by keyness
+    bigram_measures = BigramAssocMeasures()
+    finder = BigramCollocationFinder.from_words(tokens)
+    bigrams = finder.nbest(bigram_measures.raw_freq, 20)
+    # Create a string from the keyness results
+    results_str = ''
+    results_str += 'Top 20 Words:\n'
+    for word, freq in fdist.most_common(20):
+        results_str += f'{word}: {freq}\n'
+    results_str += '\nTop 20 Bigrams:\n'
+    for bigram in bigrams:
+        results_str += f'{bigram[0]} {bigram[1]}\n'
+    return results_str
+
+# Define the main function to scrape Google search results and analyze the article text
+def main(query):
+    # Scrape Google search results and create a dataframe
+    df = google_custom_search_df(query, country="ES")
+    # Scrape article text for each search result and store it in the dataframe
+    for index, row in df.iterrows():
+        url = row['link']
+        article_text = scrape_article(url)
+        df.at[index, 'scraped_text'] = article_text
+    # Analyze the article text for each search result and store the keyness results in the dataframe
+    for index, row in df.iterrows():
+        text = row['scraped_text']
+        keyness_results = analyze_text(text)
+        df.at[index, 'Keyness Results'] = keyness_results
+    # Return the final dataframe
+    df.to_csv("NLP_Data_On_SERP_Links_Text.csv")
+    return df
+
+# Define the main function to scrape Google search results and analyze the article text
+def analyze_serps(query):
+    # Scrape Google search results and create a dataframe
+    df = google_custom_search_df(query, country="ES")
+    # Scrape article text for each search result and store it in the dataframe
+    for index, row in df.iterrows():
+        url = row['link']
+        article_text = scrape_article(url)
+        df.at[index, 'scraped_text'] = article_text
+    # Analyze the article text for each search result and store the NLP results in the dataframe
+    for index, row in df.iterrows():
+        text = row['scraped_text']
+        # Tokenize the text and remove stop words
+        tokens = [word.lower() for word in word_tokenize(text) if word.isalpha() and word.lower() not in stopwords.words('spanish') and 'contact' not in word.lower() and 'admin' not in word.lower()]
+        # Calculate the frequency distribution of the tokens
+        fdist = FreqDist(tokens)
+        # Calculate the 20 most common words
+        most_common = fdist.most_common(20)
+        # Calculate the 20 least common words
+        least_common = fdist.most_common()[-20:]
+        # Calculate the 20 most common bigrams
+        bigram_measures = BigramAssocMeasures()
+        finder = BigramCollocationFinder.from_words(tokens)
+        bigrams = finder.nbest(bigram_measures.raw_freq, 20)
+        # Calculate the 20 most common trigrams
+        trigram_measures = TrigramAssocMeasures()
+        finder = TrigramCollocationFinder.from_words(tokens)
+        trigrams = finder.nbest(trigram_measures.raw_freq, 20)
+        # Calculate the 20 most common quadgrams
+        quadgram_measures = QuadgramAssocMeasures()
+        finder = QuadgramCollocationFinder.from_words(tokens)
+        quadgrams = finder.nbest(quadgram_measures.raw_freq, 20)
+        # Calculate the part-of-speech tags for the text
+        pos_tags = nltk.pos_tag(tokens)
+        # Store the NLP results in the dataframe
+        df.at[index, 'Most Common Words'] = ', '.join([word[0] for word in most_common])
+        df.at[index, 'Least Common Words'] = ', '.join([word[0] for word in least_common])
+        df.at[index, 'Most Common Bigrams'] = ', '.join([f'{bigram[0]} {bigram[1]}' for bigram in bigrams])
+        df.at[index, 'Most Common Trigrams'] = ', '.join([f'{trigram[0]} {trigram[1]} {trigram[2]}' for trigram in trigrams])
+        df.at[index, 'Most Common Quadgrams'] = ', '.join([f'{quadgram[0]} {quadgram[1]} {quadgram[2]} {quadgram[3]}' for quadgram in quadgrams])
+        df.at[index, 'POS Tags'] = ', '.join([f'{token}/{tag}' for token, tag in pos_tags])
+        # Replace any remaining commas with spaces in the Article Text column
+        df.at[index, 'scraped_text'] = ' '.join(row['scraped_text'].replace(',', ' ').split())
+    
+    # Save the final dataframe as an Excel file
+    writer = pd.ExcelWriter('NLP_Based_SERP_Results.xlsx', engine='xlsxwriter')
+    df.to_excel(writer, sheet_name='Sheet1', index=False)
+    writer.close()
+
+    # Return the final dataframe
+    return df
+
+# Define a function to summarize the NLP results from the dataframe
+def summarize_nlp(df):
+    # Calculate the total number of search results
+    total_results = len(df)
+    # Calculate the average length of the article text
+    avg_length = round(df['scraped_text'].apply(len).mean(), 2)
+    # Get the most common words across all search results
+    all_words = ', '.join(df['Most Common Words'].sum().split(', '))
+    # Get the most common bigrams across all search results
+    all_bigrams = ', '.join(df['Most Common Bigrams'].sum().split(', '))
+    # Get the most common trigrams across all search results
+    all_trigrams = ', '.join(df['Most Common Trigrams'].sum().split(', '))
+    # Get the most common quadgrams across all search results
+    all_quadgrams = ', '.join(df['Most Common Quadgrams'].sum().split(', '))
+    # Get the most common part-of-speech tags across all search results
+    all_tags = ', '.join(df['POS Tags'].sum().split(', '))
+    # Calculate the median number of words in the article text
+    median_words = statistics.median(df['scraped_text'].apply(lambda x: len(x.split())).tolist())
+    # Calculate the frequency of each word across all search results
+    word_freqs = collections.Counter(all_words.split(', '))
+    # Calculate the frequency of each bigram across all search results
+    bigram_freqs = collections.Counter(all_bigrams.split(', '))
+    # Calculate the frequency of each trigram across all search results
+    trigram_freqs = collections.Counter(all_trigrams.split(', '))
+    # Calculate the frequency of each quadgram across all search results
+    quadgram_freqs = collections.Counter(all_quadgrams.split(', '))
+    # Calculate the top 20% of most frequent words
+    top_words = ', '.join([word[0] for word in word_freqs.most_common(int(len(word_freqs) * 0.2))])
+    # Calculate the top 20% of most frequent bigrams
+    top_bigrams = ', '.join([bigram[0] for bigram in bigram_freqs.most_common(int(len(bigram_freqs) * 0.2))])
+    # Calculate the top 20% of most frequent trigrams
+    top_trigrams = ', '.join([trigram[0] for trigram in trigram_freqs.most_common(int(len(trigram_freqs) * 0.2))])
+    # Calculate the top 20% of most frequent quadgrams
+    top_quadgrams = ', '.join([quadgram[0] for quadgram in quadgram_freqs.most_common(int(len(quadgram_freqs) * 0.2))])
+
+    #print(f'Total results: {total_results}')
+    #print(f'Average article length: {avg_length} characters')
+    #print(f'Median words per article: {median_words}')
+    #print(f'Most common words: {top_words} ({len(word_freqs)} total words)')
+    #print(f'Most common bigrams: {top_bigrams} ({len(bigram_freqs)} total bigrams)')
+    #print(f'Most common trigrams: {top_trigrams} ({len(trigram_freqs)} total trigrams)')
+    #print(f'Most common quadgrams: {top_quadgrams} ({len(quadgram_freqs)} total quadgrams)')
+    #print(f'Most common part-of-speech tags: {all_tags}')
+    summary = ""
+    summary += f'Total results: {total_results}\n'
+    summary += f'Average article length: {avg_length} characters\n'
+    summary += f'Median words per article: {median_words}\n'
+    summary += f'Most common words: {top_words} ({len(word_freqs)} total words)\n'
+    summary += f'Most common bigrams: {top_bigrams} ({len(bigram_freqs)} total bigrams)\n'
+    summary += f'Most common trigrams: {top_trigrams} ({len(trigram_freqs)} total trigrams)\n'
+    summary += f'Most common quadgrams: {top_quadgrams} ({len(quadgram_freqs)} total quadgrams)\n'
+    return summary
+
+#--------------------CREACION DEL CONTENIDO: crea las estructuras y briefing del articulo en funcion de la información anterior. Crea el contenido por secciones y lo revisa para darle mayor extension.
+
+
 # Configurar la clave de API de OpenAI
 openai.api_key = os.getenv('API_GPT_KEY')
 
+def save_to_text(final_content, output_file):
+    with open(output_file, 'w', encoding='utf-8') as file:
+        for section in final_content:
+            file.writelines(paragraph + '\n' for paragraph in section)
 
-#Keyword semilla
-query= "diplomatura marketing digital"
+    print(f"El contenido ha sido guardado en {output_file}")
 
-#Cantidad de secciones
-MAX_SECTIONS = 7
+def generate_content(prompt, model="gpt-3.5-turbo-16k-0613", max_tokens=1200, temperature=0.4, max_retries=3):
+    retries = max_retries
+    while retries > 0:
+        try:
+            gpt_response = openai.ChatCompletion.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "Simulate an exceptionally talented journalist and editor. Given the following instructions, think step by step and produce the best possible output you can. Output Language: spanish. Output Codification: UTF-8."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=max_tokens,
+                n=1,
+                stop=None,
+                temperature=temperature,
+            )
+            response = gpt_response['choices'][0]['message']['content'].strip()
+            return response.strip().split('\n')
+        except Exception as e:
+            if "timeout" in str(e).lower():
+                print("Timeout error, retrying...")
+                retries -= 1
+                time.sleep(15)
+            else:
+                raise e
+    print("API is not responding after retries, moving on...")
+    return None  # Or handle this case as needed
 
-def save_to_file(filename, content):
-  with open(filename, 'w') as f:
-    f.write("\n".join(content))
+def generate_semantic_improvements_guide(prompt,query, model="gpt-4", max_tokens=1000, temperature=0.4):
+    gpt_response = openai.ChatCompletion.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": "You are an expert at Semantic SEO. In particular, you are superhuman at taking the result of an NLP keyword analysis of a search engine results page for a given keyword, and using it to build a readout/guide that can be used to inform someone writing a 2000 words article about a given topic so that they can best fully cover the semantic SEO as shown in the SERP. The goal of this guide is to help the writer make sure that the content they are creating is as comprehensive to the semantic SEO expressed in the content that ranks on the first page of Google for the given query. With the following semantic data, please provide this readout/guide. This readout/guide should be useful to someone writing about the topic, and should not include instructions to add info to the article about the SERP itself. The SERP semantic SEO data is just to be used to help inform the guide/readout. Please provide the readout/guide in well organized and hierarchical markdown. Output Lenguage: spanish. Output Codification: UTF-8."},
+            {"role": "user", "content": f"Semantic SEO data for the keyword based on the content that ranks on the first page of google for the given keyword query of: {query} and it's related semantic data:  {prompt}"}],
+        max_tokens=max_tokens,
+        n=1,
+        stop=None,
+        temperature=temperature,
+    )
+    response = gpt_response['choices'][0]['message']['content'].strip()
+    semantic_readout = response.strip().split('\n')
+    return semantic_readout
 
-def generate_content(prompt, model="gpt-3.5-turbo-16k", max_tokens=2000, temperature=0.4):
-  time.sleep(1)
-  gpt_response = openai.ChatCompletion.create(
-    model=model,
-    messages=[
-      {"role": "system", "content": "Simulate an exceptionally talented journalist and editor. Given the following instructions, think step by step and produce the best possible output you can. Output Lenguage: spanish"},
-      {"role": "user", "content": prompt}],
-    max_tokens=max_tokens,
-    n=1,
-    stop=None,
-    temperature=temperature,
-  )
-  response = gpt_response['choices'][0]['message']['content'].strip()
-  #print(response)
-  return response.strip().split('\n')
-
-
-def generate_outline(topic, model="gpt-4", max_tokens=2000):
-  time.sleep(1)
-  prompt = f"Generate an incredibly thorough article outline for the keyword: {query}. Consider all possible angles and be as thorough as possible. Please use Roman Numerals for each section."
-
-  outline = generate_content(prompt, model=model, max_tokens=max_tokens)
-  save_to_file("outline.txt", outline)
-
-  return outline
+def initial_outline(topic, semantic_readout, model="gpt-4", max_tokens=1000):
+    prompt = f"Generate an incredibly thorough article outline for the topic: {topic}. keeping in mind the SEO keywords and data being provided in our semantic seo readout. Do not include a section about semantic SEO itself, you are using the readout to better inform your creation of the outline. Try and include and extend this as much as you can. Please use Roman Numerals for each section. The goal is as thorough, clear, and useful out line as possible exploring the topic in as much depth as possible. Think step by step before answering. Please take into consideration the semantic seo readout provided here: {semantic_readout} which should help inform some of the improvements you can make, though please also consider additional improvements not included in this semantic seo readout."
+    outline = generate_content(prompt, model=model, max_tokens=max_tokens)
+    return outline
 
 
-def improve_outline(outline, query, model="gpt-4", max_tokens=1500):
-    time.sleep(1)
-    prompt = f"Given the following article outline, please improve and extend this outline significantly as much as you can keeping in mind the SEO keyword: {query}. Try and include and extend this as much as you can. Please use Roman Numerals for each section. The goal is as thorough, clear, and useful out line as possible exploring the topic in as much depth as possible. Think step by step before answering. though please also consider additional improvements not included in this outlines.  Outline to improve: {outline}."
-    improved_outline = generate_content(prompt, model=model, max_tokens=max_tokens)
-    save_to_file("improved_outline.txt", improved_outline)
-    return improved_outline
-
-
-def generate_sections(improved_outline, model="gpt-4", max_tokens=2000):
+def generate_sections(outline, model="gpt-3.5-turbo-16k-0613", max_tokens=1000):
     sections = []
-
     # Parse the outline to identify the major sections
     major_sections = []
     current_section = []
-    for part in improved_outline:
+    for part in outline:
         if re.match(r'^[ \t]*[#]*[ \t]*(I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV)\b', part):
             if current_section:  # not the first section
                 major_sections.append('\n'.join(current_section))
@@ -72,63 +322,87 @@ def generate_sections(improved_outline, model="gpt-4", max_tokens=2000):
     if current_section:  # Append the last section
         major_sections.append('\n'.join(current_section))
 
-    # Limit the number of sections to MAX_SECTIONS
-    if len(sections) > MAX_SECTIONS:
-        sections = sections[:MAX_SECTIONS]
-
     # Generate content for each major section
     for i, section_outline in enumerate(major_sections):
         full_outline = "Given the full improved outline: "
-        full_outline += '\n'.join(improved_outline)
+        full_outline += '\n'.join(outline)
         specific_section = ", and focusing specifically on the following section: "
         specific_section += section_outline
         prompt = full_outline + specific_section + ", please write a thorough section that goes in-depth, provides detail and evidence, and adds as much additional value as possible. Keep whatever hierarchy you find. Section text:"
         section = generate_content(prompt, model=model, max_tokens=max_tokens)
         sections.append(section)
-        save_to_file(f"section_{i+1}.txt", section)
     return sections
 
 
-def improve_section(section, i, model="gpt-4", max_tokens=1500):
-    time.sleep(3)
-    prompt = f"Given the following section of the article: {section}, please make thorough and improvements to this section. Keep whatever hierarchy you find. Only provide the updated section, not the text of your recommendation, just make the changes. Provide the updated section in valid Markdown please. Updated Section with improvements:"
-    improved_section = generate_content(prompt, model=model, max_tokens=max_tokens)
-    save_to_file(f"improved_section_{i+1}.txt", improved_section)
-    return " ".join(improved_section)  # join the lines into a single string
+#---------------------------- CONEXIÓN CON LA API DE WORDPRESS
 
-def concatenate_files(file_names, output_file_name):
-    final_draft = ''
+# def upload_to_wordpress(title, html_content=None, status='draft'):
 
-    for file_name in file_names:
-        with open(file_name, 'r') as file:
-            final_draft += file.read() + "\n\n"  # Add two newline characters between sections
+#   try:
+#     # RELLENAR: Añade tu usuario de WordPress y la clave de la aplicación de WordPress en tus variables de entorno
+#     login = os.getenv('WORDPRESS_LOGIN')
+#     password = os.getenv('WORDPRESS_PASSWORD')
 
-    with open(output_file_name, 'w') as output_file:
-        output_file.write(final_draft)
+#     # RELLENAR: Establecer la URL de la API de WordPress
+#     url = 'https://sitioweb.com/wp-json/wp/v2/posts'
 
-    print("Final draft created.\n")
-    return final_draft
+#     # Establecer los encabezados de autorización
+#     headers = {
+#       'Authorization': 'Basic ' + base64.b64encode(f"{login}:{password}".encode()).decode()
+#     }
 
-#**Función main**
+#     # **Preparar los datos del post**
+#     data = {
+#       'title': title,
+#       'content': html_content or '',
+#       'status': status  # 'draft' para guardar como borrador, 'publish' para publicar
+#     }
 
-def main():
-    print('Generando esquema...')
-    outline = generate_outline(topic=query)
+#     # Realizar la solicitud POST
+#     response = requests.post(url, headers=headers, json=data)
 
-    print('Mejorando esquema...')
-    improved_outline = improve_outline(outline, query)
+#     # Verificar el estado de la respuesta
+#     if response.status_code == 201:
+#       print('Post creado correctamente')
+#     else:
+#       print('Error al crear el post')
+#   except Exception as e:
+#     print(f"Se produjo un error: {str(e)}")
 
-    print('Generando secciones...')
-    sections = generate_sections(improved_outline)
+        
+# Generar el contenido
 
-    print('Mejorando secciones...')
-    for i, section in enumerate(sections):
-        improved_section = improve_section(section, i)
+def main(topic, model="gpt-3.5-turbo-16k-0613", max_tokens_outline=1000, max_tokens_section=800, max_tokens_improve_section=4000):
+  
+  query = topic
+  results = analyze_serps(query)
+  summary = summarize_nlp(results)
+  semantic_readout = generate_semantic_improvements_guide(topic, summary,  model=model, max_tokens=max_tokens_outline)
 
-    print('Combinando archivos...')
-    final_draft = concatenate_files(['outline.txt', 'improved_outline.txt'] + ['section_{}.txt'.format(i+1) for i in range(len(sections))], 'final_draft.txt')
+  print(f"Topic: {topic}\n")
 
-    print('Finalizado.')
+  print(f"Semantic SEO Readout:")
 
-if __name__ == '__main__':
-    main()
+  print("Generating initial outline...")
+  outline = initial_outline(topic, semantic_readout, model=model, max_tokens=max_tokens_outline)
+  print("Initial outline created.\n")
+
+  print("Generating sections based on the outline...")
+  sections = generate_sections(outline, model="gpt-3.5-turbo-16k-0613", max_tokens=1200)
+  print("Sections created.\n")
+
+  final_content = sections
+
+
+  return final_content
+
+# Llama a la función main para generar el contenido
+final_content=main(query)
+
+# Define el nombre del archivo de salida
+output_file = "contenido_generado.txt"
+
+# Llama a la función save_to_text para guardar el contenido en un archivo de texto
+final_content = save_to_text(final_content, output_file)
+
+print(f"El contenido ha sido guardado en {output_file}")
